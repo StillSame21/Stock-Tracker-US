@@ -1,0 +1,147 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Stock Tracker</title>
+<script src="https://cdn.jsdelivr.net/npm/@stomp/stompjs@7/bundles/stomp.umd.min.js"></script>
+<style>
+  body { font-family: system-ui, sans-serif; max-width: 900px; margin: 2rem auto; padding: 0 1rem; color: #1a1a1a; }
+  h1 { font-size: 1.4rem; }
+  .badge { display: inline-block; background: #fff3cd; border: 1px solid #ffe69c; color: #664d03;
+           padding: 0.35rem 0.7rem; border-radius: 6px; font-size: 0.85rem; margin-bottom: 1rem; }
+  .controls { margin-bottom: 1rem; display: flex; gap: 0.5rem; }
+  input[type=text] { flex: 1; padding: 0.4rem; }
+  button { padding: 0.4rem 0.9rem; }
+  table { width: 100%; border-collapse: collapse; }
+  th, td { text-align: left; padding: 0.5rem 0.6rem; border-bottom: 1px solid #e5e5e5; }
+  tr.stale { color: #999; }
+  .conn { font-size: 0.85rem; margin-bottom: 0.5rem; }
+  .conn.up { color: #157347; }
+  .conn.down { color: #b02a37; }
+  .age { font-size: 0.8rem; color: #777; }
+</style>
+</head>
+<body>
+<h1>Stock Tracker — US equities</h1>
+<div class="badge" id="feedBadge">IEX feed · ~2% of market volume · not a consolidated last price</div>
+<div class="conn down" id="connStatus">disconnected</div>
+
+<div class="controls">
+  <input type="text" id="symbols" value="AAPL,MSFT,TSLA,SPY">
+  <button id="loadBtn">Load</button>
+</div>
+
+<table>
+  <thead>
+    <tr><th>Symbol</th><th>Last</th><th>Volume</th><th>As of</th></tr>
+  </thead>
+  <tbody id="rows"></tbody>
+</table>
+
+<script>
+const rowsEl = document.getElementById('rows');
+const connStatusEl = document.getElementById('connStatus');
+const feedBadgeEl = document.getElementById('feedBadge');
+
+let client = null;
+let subscriptions = new Map(); // symbol -> stomp subscription
+const rowElements = new Map(); // symbol -> <tr>
+
+function ageSeconds(iso) {
+  if (!iso) return null;
+  return Math.floor((Date.now() - new Date(iso).getTime()) / 1000);
+}
+
+function ensureRow(symbol) {
+  if (rowElements.has(symbol)) return rowElements.get(symbol);
+  const tr = document.createElement('tr');
+  tr.innerHTML = `<td>${symbol}</td><td class="price">-</td><td class="vol">-</td><td class="age">-</td>`;
+  rowsEl.appendChild(tr);
+  rowElements.set(symbol, tr);
+  return tr;
+}
+
+function renderQuote(symbol, price, volume, asOf, stale, feed) {
+  const tr = ensureRow(symbol);
+  tr.querySelector('.price').textContent = price ?? '-';
+  tr.querySelector('.vol').textContent = volume ?? '-';
+  const age = ageSeconds(asOf);
+  tr.querySelector('.age').textContent = age === null ? '-' : `${age}s ago`;
+  tr.classList.toggle('stale', !!stale || (age !== null && age > 60));
+  if (feed) feedBadgeEl.textContent = `${feed.toUpperCase()} feed · ~2% of market volume · not a consolidated last price`;
+}
+
+async function loadSnapshot(symbols) {
+  const res = await fetch('/api/quotes?symbols=' + encodeURIComponent(symbols.join(',')));
+  if (!res.ok) {
+    console.error('snapshot load failed', await res.text());
+    return;
+  }
+  const quotes = await res.json();
+  for (const q of quotes) {
+    renderQuote(q.symbol, q.lastPrice, q.volume, q.asOf, q.stale, q.feed);
+  }
+}
+
+function subscribeLive(symbols) {
+  if (!client || !client.connected) return;
+  for (const [symbol, sub] of subscriptions) {
+    if (!symbols.includes(symbol)) {
+      sub.unsubscribe();
+      subscriptions.delete(symbol);
+    }
+  }
+  for (const symbol of symbols) {
+    if (subscriptions.has(symbol)) continue;
+    const sub = client.subscribe(`/topic/quotes/${symbol}`, (message) => {
+      const q = JSON.parse(message.body);
+      renderQuote(q.symbol, q.price, q.volume, q.asOf, q.stale, q.feed);
+    });
+    subscriptions.set(symbol, sub);
+  }
+}
+
+function connect(symbols) {
+  client = new StompJs.Client({
+    brokerURL: (location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + '/ws',
+    reconnectDelay: 3000,
+    onConnect: () => {
+      connStatusEl.textContent = 'connected — live';
+      connStatusEl.className = 'conn up';
+      subscribeLive(symbols);
+    },
+    onWebSocketClose: () => {
+      connStatusEl.textContent = 'disconnected — reconnecting…';
+      connStatusEl.className = 'conn down';
+    },
+  });
+  client.activate();
+}
+
+function refreshAges() {
+  for (const [symbol, tr] of rowElements) {
+    const ageText = tr.querySelector('.age').textContent;
+    const m = ageText.match(/^(\d+)s ago$/);
+    if (m) {
+      const next = parseInt(m[1], 10) + 1;
+      tr.querySelector('.age').textContent = `${next}s ago`;
+      tr.classList.toggle('stale', next > 60);
+    }
+  }
+}
+setInterval(refreshAges, 1000);
+
+document.getElementById('loadBtn').addEventListener('click', () => {
+  const symbols = document.getElementById('symbols').value.split(',').map(s => s.trim().toUpperCase()).filter(Boolean);
+  rowsEl.innerHTML = '';
+  rowElements.clear();
+  loadSnapshot(symbols);
+  subscribeLive(symbols);
+});
+
+const initialSymbols = document.getElementById('symbols').value.split(',').map(s => s.trim().toUpperCase());
+loadSnapshot(initialSymbols);
+connect(initialSymbols);
+</script>
+</body>
+</html>
