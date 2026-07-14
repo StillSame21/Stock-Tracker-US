@@ -130,7 +130,7 @@ public class AlertEvaluator {
         alert.setArmed(false);
         alert.setLastFiredAt(clock.instant());
         alertRepository.save(alert);
-        notificationOutbox.enqueue(alert.getId(), "EMAIL", buildPayload(alert, bar));
+        notificationOutbox.enqueue(alert.getId(), alert.getUserId(), "EMAIL", buildPayload(alert, bar));
         log.info("Alert {} fired on {} ({})", alert.getId(), bar.symbol(), alert.getCondition());
     }
 

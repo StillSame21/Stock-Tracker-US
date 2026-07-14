@@ -14,7 +14,7 @@ public class NotificationOutboxService implements NotificationOutbox {
     }
 
     @Override
-    public void enqueue(UUID alertId, String channel, String payloadJson) {
-        repository.save(new Notification(alertId, channel, payloadJson));
+    public void enqueue(UUID alertId, UUID userId, String channel, String payloadJson) {
+        repository.save(new Notification(alertId, userId, channel, payloadJson));
     }
 }

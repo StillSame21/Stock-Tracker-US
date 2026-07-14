@@ -83,7 +83,7 @@ class AlertEvaluatorPropertyTest {
         doAnswer(inv -> {
             fireCount.incrementAndGet();
             return null;
-        }).when(notificationOutbox).enqueue(any(), any(), any());
+        }).when(notificationOutbox).enqueue(any(), any(), any(), any());
 
         AlertEvaluator evaluator = new AlertEvaluator(alertRepository, alertIndex, notificationOutbox,
                 marketClockService, marketDataProvider, clock);

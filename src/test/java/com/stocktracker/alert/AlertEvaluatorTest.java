@@ -63,7 +63,7 @@ class AlertEvaluatorTest {
 
         assertThat(alert.isArmed()).isFalse();
         assertThat(alert.getLastFiredAt()).isNotNull();
-        verify(notificationOutbox, times(1)).enqueue(any(), anyString(), anyString());
+        verify(notificationOutbox, times(1)).enqueue(any(), any(), anyString(), anyString());
     }
 
     @Test
@@ -80,7 +80,7 @@ class AlertEvaluatorTest {
                     149.9, 150.6, 149.7, 150.1, 1000, false));
         }
 
-        verify(notificationOutbox, times(1)).enqueue(any(), anyString(), anyString());
+        verify(notificationOutbox, times(1)).enqueue(any(), any(), anyString(), anyString());
     }
 
     @Test
@@ -98,7 +98,7 @@ class AlertEvaluatorTest {
         evaluator.evaluateOne(alert, bar("AAPL", Instant.parse("2026-07-14T15:32:00Z"), 149, 151, 148, 150.5, 1000, false));
         assertThat(alert.isArmed()).isFalse();
 
-        verify(notificationOutbox, times(2)).enqueue(any(), anyString(), anyString());
+        verify(notificationOutbox, times(2)).enqueue(any(), any(), anyString(), anyString());
     }
 
     @Test
@@ -111,7 +111,7 @@ class AlertEvaluatorTest {
         evaluator.onBar(bar("AAPL", Instant.parse("2026-07-14T15:30:00Z"), 149, 151, 148, 150.5, 1000, false));
 
         assertThat(alert.isArmed()).isTrue(); // never evaluated, so still armed with no fire
-        verify(notificationOutbox, times(0)).enqueue(any(), anyString(), anyString());
+        verify(notificationOutbox, times(0)).enqueue(any(), any(), anyString(), anyString());
     }
 
     @Test
@@ -123,7 +123,7 @@ class AlertEvaluatorTest {
         evaluator.onBar(bar("AAPL", Instant.parse("2026-07-14T15:30:00Z"), 149, 151, 148, 150.5, 1000, false));
 
         assertThat(alert.isArmed()).isFalse();
-        verify(notificationOutbox, times(1)).enqueue(any(), anyString(), anyString());
+        verify(notificationOutbox, times(1)).enqueue(any(), any(), anyString(), anyString());
     }
 
     @Test
@@ -140,7 +140,7 @@ class AlertEvaluatorTest {
         // Same original bar delivered again (e.g. a redelivered WS frame)
         evaluator.onBar(bar("AAPL", t, 149, 151, 148, 150.5, 1000, false));
 
-        verify(notificationOutbox, times(1)).enqueue(any(), anyString(), anyString());
+        verify(notificationOutbox, times(1)).enqueue(any(), any(), anyString(), anyString());
     }
 
     @Test
@@ -152,12 +152,12 @@ class AlertEvaluatorTest {
         // Original bar does NOT meet the condition.
         evaluator.onBar(bar("AAPL", t, 149, 149.5, 148, 149, 1000, false));
         assertThat(alert.isArmed()).isTrue();
-        verify(notificationOutbox, times(0)).enqueue(any(), anyString(), anyString());
+        verify(notificationOutbox, times(0)).enqueue(any(), any(), anyString(), anyString());
 
         // A late trade revises the same bar's high above the threshold — must fire.
         evaluator.onBar(bar("AAPL", t, 149, 151, 148, 149, 1000, true));
 
         assertThat(alert.isArmed()).isFalse();
-        verify(notificationOutbox, times(1)).enqueue(any(), anyString(), anyString());
+        verify(notificationOutbox, times(1)).enqueue(any(), any(), anyString(), anyString());
     }
 }

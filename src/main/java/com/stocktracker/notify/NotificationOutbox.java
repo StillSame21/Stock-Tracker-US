@@ -9,5 +9,5 @@ import java.util.UUID;
  * actual delivery.
  */
 public interface NotificationOutbox {
-    void enqueue(UUID alertId, String channel, String payloadJson);
+    void enqueue(UUID alertId, UUID userId, String channel, String payloadJson);
 }
