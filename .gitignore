@@ -1,0 +1,7 @@
+.gradle/
+build/
+*.env
+.stocktracker/
+.idea/
+*.iml
+!src/test/resources/fixtures/*.jsonl
