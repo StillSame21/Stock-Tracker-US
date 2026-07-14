@@ -17,6 +17,29 @@ through [`docs/stock-tracker-implementation-plan.md`](docs/stock-tracker-impleme
 | [`docs/spike-notes.md`](docs/spike-notes.md) | Step 0 deliverable — fill in real API payloads as you run the feasibility spike. |
 | [`src/test/resources/fixtures/README.md`](src/test/resources/fixtures/README.md) | How to capture the WebSocket replay fixture that all stream tests depend on. |
 
+## What's already done vs. what you must do on your own machine
+
+This repo is scaffolded (build files, package layout, config, docs) but nothing
+here can install software, hold secrets, or sit through a live US trading session
+on your behalf. The following **must be done on your own desk/laptop**, not in CI
+or a cloud session:
+
+- [ ] Install JDK 25, Docker, and Node.js 20+ (`SETUP.md` §0–1)
+- [ ] Create the **two** Alpaca paper-trading accounts (dev + prod) and generate API keys
+      — this requires signing up with two real email addresses (`SETUP.md` §3)
+- [ ] Store the keys in `~/.stocktracker/{dev,prod}.env` on your machine, `chmod 600`
+      — **never** commit or paste these anywhere (`SETUP.md` §3)
+- [ ] Run the four connectivity checks against your own network/IP (`SETUP.md` §4)
+- [ ] Run the Step 0 feasibility spike and fill in real payloads in
+      [`docs/spike-notes.md`](docs/spike-notes.md)
+- [ ] Stay up once during a live US session (21:30–04:00 MYT) to capture the
+      WebSocket replay fixture (`SETUP.md` §5), then commit the resulting `.jsonl`
+- [ ] Tick every box in the `SETUP.md` §10 verification gate before starting Step 0
+      of the implementation plan
+
+Everything else — build config, package skeleton, Docker Compose for Postgres,
+profiles, docs — is already in the repo and ready to go once the above is done.
+
 ## Quick start
 
 ### 1. Prerequisites
