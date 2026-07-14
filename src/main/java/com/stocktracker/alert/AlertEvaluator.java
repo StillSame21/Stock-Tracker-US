@@ -12,6 +12,7 @@ import java.util.concurrent.ConcurrentHashMap;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.slf4j.MDC;
 import org.springframework.context.event.EventListener;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
@@ -102,7 +103,21 @@ public class AlertEvaluator {
             if (!event.updated()) {
                 lastEvaluatedOriginalBar.put(alert.getId(), event.barTimestamp());
             }
-            evaluateOne(alert, event);
+            withLoggingContext(alert, event.symbol(), () -> evaluateOne(alert, event));
+        }
+    }
+
+    // Step 8: symbol + alert_id in MDC for the duration of one evaluation, so log lines
+    // from anywhere this call chain touches (including the notification outbox write) can
+    // be correlated without threading the values through every method signature.
+    private static void withLoggingContext(Alert alert, String symbol, Runnable action) {
+        MDC.put("symbol", symbol);
+        MDC.put("alertId", alert.getId() == null ? "unknown" : alert.getId().toString());
+        try {
+            action.run();
+        } finally {
+            MDC.remove("symbol");
+            MDC.remove("alertId");
         }
     }
 

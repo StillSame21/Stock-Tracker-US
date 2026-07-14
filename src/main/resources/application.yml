@@ -23,8 +23,13 @@ management:
   endpoints.web.exposure.include: health,metrics,prometheus
   metrics.tags.application: stock-tracker
 
-logging.level:
-  com.stocktracker.gateway: DEBUG
+logging:
+  level:
+    com.stocktracker.gateway: DEBUG
+  pattern:
+    # symbol/alertId (Step 8) come from MDC — AlertEvaluator sets them for the duration of
+    # each evaluation. Empty string outside that scope, not "null".
+    console: "%d{HH:mm:ss.SSS} %-5level [%thread] [symbol=%X{symbol:-}] [alertId=%X{alertId:-}] %logger{36} - %msg%n"
 
 ---
 # replay profile — reads the committed WS fixture, zero network. Default for tests.

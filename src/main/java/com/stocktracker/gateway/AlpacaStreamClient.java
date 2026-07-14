@@ -28,6 +28,9 @@ import org.springframework.web.socket.client.WebSocketClient;
 
 import com.stocktracker.stream.SymbolPriceBus;
 
+import io.micrometer.core.instrument.Counter;
+import io.micrometer.core.instrument.Gauge;
+import io.micrometer.core.instrument.MeterRegistry;
 import tools.jackson.databind.ObjectMapper;
 
 /**
@@ -67,15 +70,28 @@ public class AlpacaStreamClient implements WebSocketHandler, StreamSubscriber {
     private volatile Instant lastMessageAt = Instant.now();
     private volatile ScheduledFuture<?> watchdogTask;
 
+    // Step 8: reconnect count and current downtime, both exported to /actuator/prometheus.
+    // disconnectedSince tracks downtime only while this instance is actually the leader —
+    // a follower is never responsible for the connection, so its "downtime" is meaningless.
+    private final Counter reconnectCounter;
+    private volatile Instant disconnectedSince;
+
     public AlpacaStreamClient(WebSocketClient webSocketClient, AlpacaProperties properties,
                                SubscriptionManager subscriptionManager, SymbolPriceBus priceBus,
-                               ObjectMapper objectMapper) {
+                               ObjectMapper objectMapper, MeterRegistry meterRegistry) {
         this.webSocketClient = webSocketClient;
         this.properties = properties;
         this.subscriptionManager = subscriptionManager;
         this.objectMapper = objectMapper;
         this.frameParser = new AlpacaFrameParser(objectMapper, priceBus);
         subscriptionManager.setSubscriber(this);
+
+        this.reconnectCounter = Counter.builder("alpaca.stream.reconnects")
+                .description("Number of times the Alpaca stream connection has been re-established")
+                .register(meterRegistry);
+        Gauge.builder("alpaca.stream.downtime_seconds", this, AlpacaStreamClient::currentDowntimeSeconds)
+                .description("Seconds since the stream disconnected while this instance held leadership; 0 if connected or not leader")
+                .register(meterRegistry);
     }
 
     @EventListener
@@ -88,7 +104,14 @@ public class AlpacaStreamClient implements WebSocketHandler, StreamSubscriber {
     @EventListener
     public void onLeadershipLost(LeadershipLostEvent event) {
         shouldRun = false;
+        disconnectedSince = null; // not our problem once we're not the leader
         closeSession();
+    }
+
+    /** For {@link StreamHealthIndicator}. */
+    double currentDowntimeSeconds() {
+        Instant since = disconnectedSince;
+        return since == null ? 0 : Duration.between(since, Instant.now()).toSeconds();
     }
 
     private synchronized void connect() {
@@ -114,6 +137,10 @@ public class AlpacaStreamClient implements WebSocketHandler, StreamSubscriber {
         this.session = newSession;
         this.authenticated = false;
         this.lastMessageAt = Instant.now();
+        this.disconnectedSince = null;
+        if (reconnectAttempts > 0) {
+            reconnectCounter.increment();
+        }
         this.reconnectAttempts = 0;
         log.info("Stream connected, authenticating");
         sendRaw(newSession, Map.of("action", "auth", "key", properties.keyId(), "secret", properties.secretKey()));
@@ -151,6 +178,9 @@ public class AlpacaStreamClient implements WebSocketHandler, StreamSubscriber {
         authenticated = false;
         stopWatchdog();
         if (shouldRun) {
+            if (disconnectedSince == null) {
+                disconnectedSince = Instant.now();
+            }
             scheduleReconnect();
         }
     }

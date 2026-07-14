@@ -14,6 +14,8 @@ import io.github.resilience4j.ratelimiter.RateLimiter;
 import io.github.resilience4j.ratelimiter.RateLimiterConfig;
 import io.github.resilience4j.retry.Retry;
 import io.github.resilience4j.retry.RetryConfig;
+import io.micrometer.core.instrument.Gauge;
+import io.micrometer.core.instrument.MeterRegistry;
 import org.springframework.web.client.HttpClientErrorException;
 
 /**
@@ -34,7 +36,7 @@ public class AlpacaResilience {
     private final CircuitBreaker circuitBreaker;
     private final Retry retry;
 
-    public AlpacaResilience(AlpacaProperties properties) {
+    public AlpacaResilience(AlpacaProperties properties, MeterRegistry meterRegistry) {
         this.rateLimiter = RateLimiter.of("alpaca", RateLimiterConfig.custom()
                 .limitForPeriod(properties.rateLimitPerMinute())   // 10% headroom under the 200 rpm ceiling (C7)
                 .limitRefreshPeriod(Duration.ofMinutes(1))
@@ -53,6 +55,23 @@ public class AlpacaResilience {
                 .intervalFunction(IntervalFunction.ofExponentialBackoff(Duration.ofMillis(200), 2.0))
                 .retryOnException(AlpacaResilience::isRetryable)
                 .build());
+
+        // Step 8: upstream-call budget vs. the 200 rpm ceiling, and circuit state, both
+        // exported to /actuator/prometheus. Bound to the instances directly rather than via
+        // resilience4j-micrometer's Tagged*Metrics helpers, which expect a whole Registry
+        // (RateLimiterRegistry/CircuitBreakerRegistry) rather than the single named instances
+        // this class creates.
+        Gauge.builder("alpaca.ratelimiter.available_permissions", rateLimiter,
+                        rl -> rl.getMetrics().getAvailablePermissions())
+                .description("Remaining Alpaca REST calls in the current rate-limit window")
+                .register(meterRegistry);
+        Gauge.builder("alpaca.circuitbreaker.failure_rate", circuitBreaker,
+                        cb -> cb.getMetrics().getFailureRate())
+                .description("Alpaca REST call failure rate over the sliding window")
+                .register(meterRegistry);
+        Gauge.builder("alpaca.circuitbreaker.state", circuitBreaker, cb -> cb.getState().ordinal())
+                .description("CircuitBreaker.State ordinal (CLOSED=0, OPEN=1, HALF_OPEN=2, ...)")
+                .register(meterRegistry);
     }
 
     // Composed by hand rather than via the resilience4j-all Decorators helper — that

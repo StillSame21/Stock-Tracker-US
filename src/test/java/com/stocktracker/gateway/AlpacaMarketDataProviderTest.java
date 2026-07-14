@@ -13,6 +13,8 @@ import com.github.tomakehurst.wiremock.client.WireMock;
 import com.stocktracker.gateway.alpaca.AlpacaSnapshotClient;
 import com.stocktracker.quote.Quote;
 
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
+
 import static com.github.tomakehurst.wiremock.client.WireMock.aResponse;
 import static com.github.tomakehurst.wiremock.client.WireMock.get;
 import static com.github.tomakehurst.wiremock.client.WireMock.urlPathEqualTo;
@@ -42,7 +44,7 @@ class AlpacaMarketDataProviderTest {
                 .defaultHeader("APCA-API-KEY-ID", properties.keyId())
                 .defaultHeader("APCA-API-SECRET-KEY", properties.secretKey())
                 .build();
-        AlpacaResilience resilience = new AlpacaResilience(properties);
+        AlpacaResilience resilience = new AlpacaResilience(properties, new SimpleMeterRegistry());
         AlpacaSnapshotClient snapshotClient = new AlpacaSnapshotClient(restClient, resilience, properties);
         return new AlpacaMarketDataProvider(snapshotClient, properties);
     }

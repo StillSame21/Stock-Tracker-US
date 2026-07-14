@@ -71,4 +71,8 @@ public class AlertIndex {
     public List<Alert> forSymbol(String symbol) {
         return bySymbol.getOrDefault(symbol, List.of());
     }
+
+    public Set<String> trackedSymbols() {
+        return bySymbol.keySet();
+    }
 }

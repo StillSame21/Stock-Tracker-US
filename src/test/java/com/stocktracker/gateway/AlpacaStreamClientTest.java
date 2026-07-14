@@ -14,6 +14,7 @@ import org.springframework.web.socket.client.WebSocketClient;
 
 import com.stocktracker.stream.SymbolPriceBus;
 
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import tools.jackson.databind.ObjectMapper;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -37,7 +38,8 @@ class AlpacaStreamClientTest {
                 .thenReturn(CompletableFuture.completedFuture(mockSession));
         when(mockSession.isOpen()).thenReturn(true);
         SymbolPriceBus priceBus = new SymbolPriceBus(event -> { });
-        return new AlpacaStreamClient(mockWebSocketClient, properties, subscriptionManager, priceBus, new ObjectMapper());
+        return new AlpacaStreamClient(mockWebSocketClient, properties, subscriptionManager, priceBus,
+                new ObjectMapper(), new SimpleMeterRegistry());
     }
 
     @Test
