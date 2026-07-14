@@ -29,3 +29,14 @@ grep -c '"T":"b"' iex-session.jsonl   # want >100 bar messages
 
 Every downstream step (4–7) tests against this file via the `replay` profile.
 **Do not start Step 4 without it.**
+
+## `synthetic-sample.jsonl`
+
+A hand-written 8-line fixture in the same wire format, used only by
+`ReplayStreamClientTest`/`AlpacaFrameParserTest` to exercise the parser
+(bar, updated-bar, trade, trade cancellation) without a live session. It is
+**not** a substitute for `iex-session.jsonl` — it has no volume, no gaps in
+a thin symbol, and doesn't satisfy the Step 0 acceptance gate. Once the real
+capture exists, only `iex-session.jsonl` is used by the `replay` profile
+default (`alpaca.replay-file` in `application.yml`); this file stays
+test-only.
