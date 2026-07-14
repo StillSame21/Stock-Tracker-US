@@ -51,9 +51,7 @@ public class WatchlistService {
     public Watchlist addSymbol(UUID watchlistId, String symbolCode) {
         symbolValidator.validateAll(Set.of(symbolCode));
         Watchlist watchlist = get(watchlistId);
-        Symbol symbol = symbolRepository.findAll().stream()
-                .filter(s -> s.getSymbol().equalsIgnoreCase(symbolCode))
-                .findFirst()
+        Symbol symbol = symbolRepository.findBySymbolIgnoreCase(symbolCode)
                 .orElseThrow(() -> new UnsupportedSymbolException(Set.of(symbolCode)));
         watchlist.addSymbol(symbol);
         return watchlistRepository.save(watchlist);

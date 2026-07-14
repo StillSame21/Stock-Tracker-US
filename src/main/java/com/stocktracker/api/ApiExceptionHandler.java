@@ -9,6 +9,7 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 
+import com.stocktracker.alert.InvalidAlertException;
 import com.stocktracker.gateway.QuoteUnavailableException;
 import com.stocktracker.symbol.UnsupportedSymbolException;
 
@@ -27,6 +28,11 @@ public class ApiExceptionHandler {
 
     @ExceptionHandler(UnsupportedSymbolException.class)
     public ResponseEntity<Map<String, Object>> onUnsupportedSymbol(UnsupportedSymbolException e) {
+        return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(errorBody(e.getMessage()));
+    }
+
+    @ExceptionHandler(InvalidAlertException.class)
+    public ResponseEntity<Map<String, Object>> onInvalidAlert(InvalidAlertException e) {
         return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(errorBody(e.getMessage()));
     }
 

@@ -6,7 +6,7 @@ import java.sql.ResultSet;
 import java.sql.Statement;
 
 import org.junit.jupiter.api.Test;
-import org.testcontainers.containers.PostgreSQLContainer;
+import org.testcontainers.postgresql.PostgreSQLContainer;
 
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -18,7 +18,7 @@ class PostgresSmokeTest {
 
     @Test
     void postgresStartsAndAnswersQueries() throws Exception {
-        try (PostgreSQLContainer<?> postgres = new PostgreSQLContainer<>("postgres:17-alpine")) {
+        try (PostgreSQLContainer postgres = new PostgreSQLContainer("postgres:17-alpine")) {
             postgres.start();
             try (Connection conn = DriverManager.getConnection(
                      postgres.getJdbcUrl(), postgres.getUsername(), postgres.getPassword());

@@ -1,6 +1,7 @@
 package com.stocktracker.symbol;
 
 import java.util.List;
+import java.util.Optional;
 import java.util.UUID;
 
 import org.springframework.data.jpa.repository.JpaRepository;
@@ -14,4 +15,6 @@ public interface SymbolRepository extends JpaRepository<Symbol, UUID> {
 
     @Query("select s.symbol from Symbol s where s.tradable = true")
     List<String> findAllTradableSymbols();
+
+    Optional<Symbol> findBySymbolIgnoreCase(String symbol);
 }
