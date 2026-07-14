@@ -4,4 +4,5 @@ build/
 .stocktracker/
 .idea/
 *.iml
+.jqwik-database
 !src/test/resources/fixtures/*.jsonl

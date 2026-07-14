@@ -1,0 +1,15 @@
+spring:
+  jpa:
+    hibernate.ddl-auto: validate
+    open-in-view: false
+  flyway:
+    enabled: true
+
+alpaca:
+  key-id: test-key
+  secret-key: test-secret
+  data-url: http://localhost:1
+  trading-url: http://localhost:1
+  stream-url: wss://localhost:1
+  feed: iex
+  rate-limit-per-minute: 180
