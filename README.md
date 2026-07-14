@@ -5,24 +5,31 @@ notifications — built against the Alpaca Market Data API on the free (IEX) tie
 
 **Stack:** Java 25 · Spring Boot 4.1 · PostgreSQL 17 · Gradle 9 · Alpaca Market Data API v2 (no vendor SDK)
 
-**Status:** repo scaffold in place; implementation not started. Work proceeds step-by-step
-through [`docs/stock-tracker-implementation-plan.md`](docs/stock-tracker-implementation-plan.md).
+**Status:** Steps 1–8 of the implementation plan are written, compiled, and covered by 42
+passing tests — but **Step 0 was never run** (no real Alpaca credentials or live market
+session exist in the environment that built this). See [`HANDOFF.md`](HANDOFF.md) before
+you trust any of it.
 
 ## Read this first
 
 | Doc | What it is |
 |---|---|
-| [`SETUP.md`](SETUP.md) | **Start here.** Environment setup, Alpaca accounts, connectivity checks, and the verification gate you must pass before writing code. |
+| [`HANDOFF.md`](HANDOFF.md) | **Start here if code already exists.** What's implemented, what's stubbed, what needs your intervention, and every bug/API surprise found along the way. |
+| [`SETUP.md`](SETUP.md) | Environment setup, Alpaca accounts, connectivity checks, and the verification gate you must pass before Step 0. |
 | [`docs/stock-tracker-implementation-plan.md`](docs/stock-tracker-implementation-plan.md) | The full Step 0 → Step 8 implementation plan, including the compatibility register (C1–C10) the whole design hangs on. |
-| [`docs/spike-notes.md`](docs/spike-notes.md) | Step 0 deliverable — fill in real API payloads as you run the feasibility spike. |
-| [`src/test/resources/fixtures/README.md`](src/test/resources/fixtures/README.md) | How to capture the WebSocket replay fixture that all stream tests depend on. |
+| [`docs/spike-notes.md`](docs/spike-notes.md) | Step 0 deliverable — still a template. Fill in real API payloads as you run the feasibility spike. |
+| [`src/test/resources/fixtures/README.md`](src/test/resources/fixtures/README.md) | How to capture the real WebSocket replay fixture — the committed `synthetic-sample.jsonl` is test-only, not a substitute. |
 
 ## What's already done vs. what you must do on your own machine
 
-This repo is scaffolded (build files, package layout, config, docs) but nothing
-here can install software, hold secrets, or sit through a live US trading session
-on your behalf. The following **must be done on your own desk/laptop**, not in CI
-or a cloud session:
+Steps 1–8 are implemented: gateway/REST quotes, symbol universe sync, persistence,
+the streaming ingestor with leader election, the alert engine, notification outbox,
+a live STOMP-backed UI, and basic hardening (metrics, health checks, reconciliation).
+Full accounting in [`HANDOFF.md`](HANDOFF.md), including every bug that turned up
+from actually compiling against real dependency versions instead of guessing.
+
+None of that changes what only a human at a real desk can do — this environment
+can't install software, hold secrets, or sit through a live US trading session:
 
 - [ ] Install JDK 25, Docker, and Node.js 20+ (`SETUP.md` §0–1)
 - [ ] Create the **two** Alpaca paper-trading accounts (dev + prod) and generate API keys
@@ -31,14 +38,15 @@ or a cloud session:
       — **never** commit or paste these anywhere (`SETUP.md` §3)
 - [ ] Run the four connectivity checks against your own network/IP (`SETUP.md` §4)
 - [ ] Run the Step 0 feasibility spike and fill in real payloads in
-      [`docs/spike-notes.md`](docs/spike-notes.md)
-- [ ] Stay up once during a live US session (21:30–04:00 MYT) to capture the
-      WebSocket replay fixture (`SETUP.md` §5), then commit the resulting `.jsonl`
-- [ ] Tick every box in the `SETUP.md` §10 verification gate before starting Step 0
-      of the implementation plan
-
-Everything else — build config, package skeleton, Docker Compose for Postgres,
-profiles, docs — is already in the repo and ready to go once the above is done.
+      [`docs/spike-notes.md`](docs/spike-notes.md) — **still a template**, not done
+- [ ] Stay up once during a live US session (21:30–04:00 MYT) to capture the real
+      WebSocket replay fixture (`SETUP.md` §5) — the committed `synthetic-sample.jsonl`
+      is 8 hand-written lines for unit tests only, not a substitute
+- [ ] Tick every box in the `SETUP.md` §10 verification gate
+- [ ] Run `./gradlew build` on your machine — this sandbox's network policy blocks
+      the Gradle distribution download, so the real Gradle 9.6.1/JDK 25 combination
+      has never actually built this repo (see `HANDOFF.md` for what *was* verified)
+- [ ] Wire a real email provider — `EmailChannel` is currently a logging stub
 
 ## Quick start
 
@@ -101,12 +109,17 @@ Actuator: <http://localhost:8080/actuator/health> · metrics at `/actuator/prome
 
 ```
 com.stocktracker
-├── gateway/   # ONLY package that knows Alpaca exists (REST provider + WS stream client)
-├── quote/     # Quote record, caching, watchlist quote assembly
-├── symbol/    # US symbol universe, validation, typeahead search
-├── alert/     # Alert engine: state machine, hysteresis, cooldown
-├── notify/    # Outbox poller, notification channels, retries
-└── api/       # REST controllers + STOMP broadcaster
+├── gateway/    # ONLY package that knows Alpaca exists (REST client, WS stream client,
+│               # leader election, resilience, metrics) — Alpaca DTOs live in gateway.alpaca
+│               # and never leave it, enforced by an ArchUnit test
+├── stream/     # Vendor-neutral BarEvent/TradeEvent + the internal price bus
+├── quote/      # Quote record, UI-side caching (never read by the alert engine — L3.1)
+├── symbol/     # US symbol universe sync, validation, typeahead search
+├── user/       # Minimal user accounts (email, timezone, webhook URL)
+├── watchlist/  # Watchlist CRUD, joined to live/cached quotes
+├── alert/      # Alert engine: state machine, hysteresis, cooldown, reconciliation
+├── notify/     # Outbox poller, notification channels (webhook real, email stub), retries
+└── api/        # REST controllers, STOMP config + broadcaster, static UI
 ```
 
 Flyway owns the schema (`src/main/resources/db/migration`); JPA runs with
@@ -129,7 +142,12 @@ Full detail in the plan's compatibility register; the load-bearing ones:
 
 ## Where to begin
 
-1. Work through [`SETUP.md`](SETUP.md) top to bottom and tick every box in §10.
-2. Run the Step 0 spike; record results in [`docs/spike-notes.md`](docs/spike-notes.md).
-3. Capture the replay fixture during one live US session.
-4. Then start Step 1 (gateway + REST quotes) in the plan.
+1. Read [`HANDOFF.md`](HANDOFF.md) — what's implemented, what's stubbed, what to check first.
+2. Work through [`SETUP.md`](SETUP.md) top to bottom and tick every box in §10.
+3. Run the Step 0 spike; record results in [`docs/spike-notes.md`](docs/spike-notes.md).
+4. Capture the real replay fixture during one live US session.
+5. Run `./gradlew build` for real — Docker-dependent tests (`PostgresSmokeTest`,
+   `WatchlistQuoteBatchingIT`) and the Gradle 9.6.1/JDK 25 toolchain itself have
+   never executed outside this session's workarounds.
+6. From there: review the code against Steps 1–8 in the plan, wire a real email
+   provider, and decide on the paid Alpaca tier per the plan's cost model.
