@@ -4,6 +4,8 @@ spring:
     open-in-view: false
   flyway:
     enabled: true
+  mail:
+    host: localhost   # dummy — no test actually sends mail, this just satisfies bean creation
 
 alpaca:
   key-id: test-key

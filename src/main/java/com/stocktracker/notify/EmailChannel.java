@@ -1,40 +1,43 @@
 package com.stocktracker.notify;
 
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.mail.MailException;
+import org.springframework.mail.SimpleMailMessage;
+import org.springframework.mail.javamail.JavaMailSender;
 import org.springframework.stereotype.Component;
 
 import com.stocktracker.user.User;
 import com.stocktracker.user.UserRepository;
 
+import tools.jackson.databind.JsonNode;
+import tools.jackson.databind.ObjectMapper;
+
 /**
- * PLACEHOLDER — logs what would be sent instead of actually delivering
- * email. There is no SMTP/SendGrid/SES account or credential available in
- * this environment to wire a real sender against (SETUP.md never provisions
- * one — L6.2 in the plan already flags email deliverability as its own
- * project). This satisfies the {@link NotificationChannel} contract and the
- * outbox/retry machinery around it, but every "EMAIL" notification will be
- * marked {@code SENT} without a human ever receiving anything.
+ * Sends alert notifications over SMTP via {@link JavaMailSender}. Credentials come from
+ * {@code spring.mail.*} (env vars {@code SMTP_HOST}/{@code SMTP_USERNAME}/{@code SMTP_PASSWORD},
+ * per SETUP.md's pattern — never in {@code application.yml}).
  *
- * <p><b>Before relying on this in anything but local development:</b> pick a
- * provider, add its dependency and credentials (as env vars, per SETUP.md's
- * pattern — never in {@code application.yml}), and replace the body of
- * {@link #send} with a real API call. The {@code (symbol, condition,
- * threshold, actual price, bar timestamp)} data needed for the template is
- * already in {@code Notification.payload} — see {@code AlertEvaluator}'s
- * {@code buildPayload}. Rendering the bar timestamp in the user's timezone
- * (L6's stated requirement) additionally needs {@code User.getTz()}, not yet
- * wired into the payload — do that when a real provider goes in.
+ * <p>{@link JavaMailSender} is injected via {@link ObjectProvider} rather than directly: Boot only
+ * registers that bean when {@code spring.mail.host} is non-blank, and this channel must not prevent
+ * the whole app from starting just because SMTP hasn't been configured yet — same tolerance
+ * {@link WebhookChannel} already gives a user with no {@code webhook_url} set.
  */
 @Component
 public class EmailChannel implements NotificationChannel {
 
-    private static final Logger log = LoggerFactory.getLogger(EmailChannel.class);
-
     private final UserRepository userRepository;
+    private final ObjectProvider<JavaMailSender> mailSender;
+    private final ObjectMapper objectMapper;
+    private final String fromAddress;
 
-    public EmailChannel(UserRepository userRepository) {
+    public EmailChannel(UserRepository userRepository, ObjectProvider<JavaMailSender> mailSender,
+                         ObjectMapper objectMapper,
+                         @Value("${notify.email.from:alerts@stocktracker.local}") String fromAddress) {
         this.userRepository = userRepository;
+        this.mailSender = mailSender;
+        this.objectMapper = objectMapper;
+        this.fromAddress = fromAddress;
     }
 
     @Override
@@ -44,9 +47,47 @@ public class EmailChannel implements NotificationChannel {
 
     @Override
     public void send(Notification notification) throws NotificationSendException {
+        JavaMailSender sender = mailSender.getIfAvailable();
+        if (sender == null) {
+            throw new NotificationSendException("SMTP not configured — set SMTP_HOST/SMTP_USERNAME/SMTP_PASSWORD");
+        }
+
         User user = userRepository.findById(notification.getUserId())
                 .orElseThrow(() -> new NotificationSendException("Unknown user " + notification.getUserId()));
-        log.info("[EMAIL STUB — no real provider configured] Would send to {}: {}",
-                user.getEmail(), notification.getPayload());
+
+        JsonNode payload = objectMapper.readTree(notification.getPayload());
+
+        SimpleMailMessage message = new SimpleMailMessage();
+        message.setFrom(fromAddress);
+        message.setTo(user.getEmail());
+        message.setSubject("Stock alert: %s %s".formatted(
+                payload.path("symbol").asString("?"), payload.path("condition").asString("?")));
+        message.setText(renderBody(payload, user));
+
+        try {
+            sender.send(message);
+        } catch (MailException e) {
+            throw new NotificationSendException("Failed to send email to " + user.getEmail(), e);
+        }
+    }
+
+    // barTimestamp is UTC on the wire; rendering it in the user's own tz is left as a follow-up —
+    // needs the bar instant parsed and reformatted with ZoneId.of(user.getTz()), not just appended.
+    private static String renderBody(JsonNode payload, User user) {
+        return """
+                %s %s
+
+                Threshold:  %s
+                Bar close:  %s (high %s / low %s)
+                Bar time:   %s UTC (your timezone: %s)
+                """.formatted(
+                payload.path("symbol").asString("?"),
+                payload.path("condition").asString("?"),
+                payload.path("threshold").asString("?"),
+                payload.path("barClose").asString("?"),
+                payload.path("barHigh").asString("?"),
+                payload.path("barLow").asString("?"),
+                payload.path("barTimestamp").asString("?"),
+                user.getTz());
     }
 }
