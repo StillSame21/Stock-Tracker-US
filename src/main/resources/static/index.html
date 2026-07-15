@@ -3,15 +3,20 @@
 <head>
 <meta charset="utf-8">
 <title>Stock Tracker</title>
-<script src="https://cdn.jsdelivr.net/npm/@stomp/stompjs@7/bundles/stomp.umd.min.js"></script>
+<script src="/vendor/stomp.umd.min.js"></script>
 <style>
   body { font-family: system-ui, sans-serif; max-width: 900px; margin: 2rem auto; padding: 0 1rem; color: #1a1a1a; }
   h1 { font-size: 1.4rem; }
+  h2 { font-size: 1.1rem; margin-top: 2rem; }
   .badge { display: inline-block; background: #fff3cd; border: 1px solid #ffe69c; color: #664d03;
            padding: 0.35rem 0.7rem; border-radius: 6px; font-size: 0.85rem; margin-bottom: 1rem; }
-  .controls { margin-bottom: 1rem; display: flex; gap: 0.5rem; }
-  input[type=text] { flex: 1; padding: 0.4rem; }
-  button { padding: 0.4rem 0.9rem; }
+  .hint { font-size: 0.8rem; color: #777; margin: 0.2rem 0 0.8rem; }
+  .controls { margin-bottom: 1rem; display: flex; gap: 0.5rem; flex-wrap: wrap; align-items: center; }
+  input[type=text], input[type=number] { padding: 0.4rem; }
+  input[type=text].symbols { flex: 1; }
+  select { padding: 0.4rem; }
+  button { padding: 0.4rem 0.9rem; cursor: pointer; }
+  button.danger { background: #f8d7da; border: 1px solid #f1aeb5; }
   table { width: 100%; border-collapse: collapse; }
   th, td { text-align: left; padding: 0.5rem 0.6rem; border-bottom: 1px solid #e5e5e5; }
   tr.stale { color: #999; }
@@ -19,6 +24,10 @@
   .conn.up { color: #157347; }
   .conn.down { color: #b02a37; }
   .age { font-size: 0.8rem; color: #777; }
+  .panel { border: 1px solid #e5e5e5; border-radius: 8px; padding: 1rem; margin-top: 0.5rem; }
+  .assetid { font-family: monospace; font-size: 0.8rem; color: #555; }
+  .empty { color: #999; font-style: italic; padding: 0.5rem 0; }
+  .error { color: #b02a37; font-size: 0.85rem; margin: 0.3rem 0; }
 </style>
 </head>
 <body>
@@ -27,8 +36,8 @@
 <div class="conn down" id="connStatus">disconnected</div>
 
 <div class="controls">
-  <input type="text" id="symbols" value="AAPL,MSFT,TSLA,SPY">
-  <button id="loadBtn">Load</button>
+  <input type="text" id="symbols" class="symbols" value="AAPL,MSFT,TSLA,SPY">
+  <button id="loadBtn">Load prices</button>
 </div>
 
 <table>
@@ -37,6 +46,48 @@
   </thead>
   <tbody id="rows"></tbody>
 </table>
+
+<h2>User</h2>
+<div class="panel">
+  <div class="controls">
+    <input type="text" id="userId" class="symbols" placeholder="user UUID">
+    <button id="loadUserDataBtn">Load watchlists &amp; alerts</button>
+  </div>
+  <p class="hint">There's no signup flow yet — paste the UUID of a row already in the <code>users</code>
+    table. Watchlists and alerts below are scoped to this user.</p>
+  <div class="error" id="userError"></div>
+</div>
+
+<h2>Watchlists</h2>
+<div class="panel">
+  <div class="controls">
+    <input type="text" id="newWatchlistName" placeholder="new watchlist name">
+    <button id="createWatchlistBtn">Create watchlist</button>
+  </div>
+  <div id="watchlists" class="empty">Load a user above to see their watchlists.</div>
+</div>
+
+<h2>Alerts</h2>
+<div class="panel">
+  <div class="controls">
+    <input type="text" id="alertSymbol" placeholder="symbol, e.g. AAPL">
+    <select id="alertCondition">
+      <option value="PRICE_ABOVE">price above</option>
+      <option value="PRICE_BELOW">price below</option>
+      <option value="PCT_CHANGE_UP">% change up</option>
+      <option value="PCT_CHANGE_DOWN">% change down</option>
+      <option value="VOLUME_ABOVE">volume above</option>
+    </select>
+    <input type="number" id="alertThreshold" placeholder="threshold" step="any" style="width:7rem">
+    <input type="number" id="alertCooldown" placeholder="cooldown (s)" value="3600" min="60" style="width:8rem">
+    <label><input type="checkbox" id="alertExtendedHours"> extended hours</label>
+    <button id="createAlertBtn">Create alert</button>
+  </div>
+  <p class="hint">Threshold is a price for price conditions, a percent for % conditions (e.g. <code>5</code>
+    for 5%), or a share count for volume. Condition dropdown maps 1:1 to the <code>Condition</code> enum.</p>
+  <div class="error" id="alertError"></div>
+  <div id="alerts" class="empty">Load a user above to see their alerts.</div>
+</div>
 
 <script>
 const rowsEl = document.getElementById('rows');
@@ -142,6 +193,216 @@ document.getElementById('loadBtn').addEventListener('click', () => {
 const initialSymbols = document.getElementById('symbols').value.split(',').map(s => s.trim().toUpperCase());
 loadSnapshot(initialSymbols);
 connect(initialSymbols);
+
+// ---- Watchlist + alert management (Step 7.4) ----
+// No signup flow exists yet — userId is pasted in by hand, not created here.
+
+const watchlistsEl = document.getElementById('watchlists');
+const alertsEl = document.getElementById('alerts');
+const userErrorEl = document.getElementById('userError');
+const alertErrorEl = document.getElementById('alertError');
+
+function currentUserId() {
+  return document.getElementById('userId').value.trim();
+}
+
+async function api(method, url, body) {
+  const res = await fetch(url, {
+    method,
+    headers: body ? { 'Content-Type': 'application/json' } : undefined,
+    body: body ? JSON.stringify(body) : undefined,
+  });
+  if (!res.ok) {
+    const text = await res.text().catch(() => res.statusText);
+    throw new Error(`${method} ${url} -> ${res.status}: ${text}`);
+  }
+  const contentType = res.headers.get('content-type') || '';
+  return contentType.includes('application/json') ? res.json() : null;
+}
+
+async function loadWatchlists() {
+  const userId = currentUserId();
+  if (!userId) {
+    watchlistsEl.innerHTML = '';
+    watchlistsEl.className = 'empty';
+    watchlistsEl.textContent = 'Load a user above to see their watchlists.';
+    return;
+  }
+  const lists = await api('GET', `/api/watchlists?userId=${encodeURIComponent(userId)}`);
+  renderWatchlists(lists);
+}
+
+function renderWatchlists(lists) {
+  watchlistsEl.className = '';
+  if (!lists.length) {
+    watchlistsEl.innerHTML = '<div class="empty">No watchlists yet.</div>';
+    return;
+  }
+  watchlistsEl.innerHTML = '';
+  for (const w of lists) {
+    const div = document.createElement('div');
+    div.style.marginBottom = '1rem';
+    const symbolsHtml = (w.symbols || []).map(s => `
+      <span style="display:inline-flex;align-items:center;gap:0.3rem;border:1px solid #e5e5e5;border-radius:4px;padding:0.15rem 0.5rem;margin:0.15rem;">
+        ${s.symbol}
+        <button data-remove-symbol="${s.symbol}" data-watchlist-id="${w.id}" style="padding:0 0.3rem;">×</button>
+      </span>`).join('') || '<span class="empty">no symbols</span>';
+    div.innerHTML = `
+      <strong>${w.name}</strong> <span class="assetid">${w.id}</span><br>
+      ${symbolsHtml}
+      <div class="controls" style="margin-top:0.4rem;">
+        <input type="text" placeholder="add symbol" data-add-symbol-for="${w.id}" style="width:8rem">
+        <button data-add-symbol-btn="${w.id}">Add</button>
+        <button data-load-quotes="${w.id}">Load into price table</button>
+      </div>`;
+    watchlistsEl.appendChild(div);
+  }
+
+  watchlistsEl.querySelectorAll('[data-remove-symbol]').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      const wid = btn.getAttribute('data-watchlist-id');
+      const symbol = btn.getAttribute('data-remove-symbol');
+      await api('DELETE', `/api/watchlists/${wid}/items/${encodeURIComponent(symbol)}`);
+      loadWatchlists();
+    });
+  });
+  watchlistsEl.querySelectorAll('[data-add-symbol-btn]').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      const wid = btn.getAttribute('data-add-symbol-btn');
+      const input = watchlistsEl.querySelector(`[data-add-symbol-for="${wid}"]`);
+      const symbol = input.value.trim().toUpperCase();
+      if (!symbol) return;
+      userErrorEl.textContent = '';
+      try {
+        await api('POST', `/api/watchlists/${wid}/items`, { symbol });
+        input.value = '';
+        loadWatchlists();
+      } catch (e) {
+        userErrorEl.textContent = e.message;
+      }
+    });
+  });
+  watchlistsEl.querySelectorAll('[data-load-quotes]').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      const wid = btn.getAttribute('data-load-quotes');
+      const quotes = await api('GET', `/api/watchlists/${wid}/quotes`);
+      rowsEl.innerHTML = '';
+      rowElements.clear();
+      const symbols = Object.keys(quotes);
+      for (const symbol of symbols) {
+        const q = quotes[symbol];
+        renderQuote(symbol, q.lastPrice, q.volume, q.asOf, q.stale, q.feed);
+      }
+      subscribeLive(symbols);
+    });
+  });
+}
+
+document.getElementById('createWatchlistBtn').addEventListener('click', async () => {
+  const userId = currentUserId();
+  const name = document.getElementById('newWatchlistName').value.trim();
+  userErrorEl.textContent = '';
+  if (!userId || !name) {
+    userErrorEl.textContent = 'userId and a watchlist name are both required.';
+    return;
+  }
+  try {
+    await api('POST', '/api/watchlists', { userId, name });
+    document.getElementById('newWatchlistName').value = '';
+    loadWatchlists();
+  } catch (e) {
+    userErrorEl.textContent = e.message;
+  }
+});
+
+async function loadAlerts() {
+  const userId = currentUserId();
+  if (!userId) {
+    alertsEl.innerHTML = '';
+    alertsEl.className = 'empty';
+    alertsEl.textContent = 'Load a user above to see their alerts.';
+    return;
+  }
+  const alerts = await api('GET', `/api/alerts?userId=${encodeURIComponent(userId)}`);
+  renderAlerts(alerts);
+}
+
+function renderAlerts(alerts) {
+  alertsEl.className = '';
+  if (!alerts.length) {
+    alertsEl.innerHTML = '<div class="empty">No alerts yet.</div>';
+    return;
+  }
+  const table = document.createElement('table');
+  table.innerHTML = `<thead><tr>
+      <th>Asset ID</th><th>Condition</th><th>Threshold</th><th>Cooldown</th>
+      <th>Armed</th><th>Status</th><th>Ext. hours</th><th></th>
+    </tr></thead><tbody></tbody>`;
+  const tbody = table.querySelector('tbody');
+  for (const a of alerts) {
+    const tr = document.createElement('tr');
+    tr.innerHTML = `
+      <td class="assetid">${a.assetId}</td>
+      <td>${a.condition}</td>
+      <td>${a.threshold}</td>
+      <td>${a.cooldownSeconds}s</td>
+      <td>${a.armed ? 'armed' : 'triggered'}</td>
+      <td>${a.status}</td>
+      <td>${a.extendedHours ? 'yes' : 'no'}</td>
+      <td>
+        <button data-toggle-alert="${a.id}" data-next-status="${a.status === 'ACTIVE' ? 'PAUSED' : 'ACTIVE'}">
+          ${a.status === 'ACTIVE' ? 'Pause' : 'Activate'}
+        </button>
+        <button class="danger" data-delete-alert="${a.id}">Delete</button>
+      </td>`;
+    tbody.appendChild(tr);
+  }
+  alertsEl.innerHTML = '';
+  alertsEl.appendChild(table);
+
+  alertsEl.querySelectorAll('[data-toggle-alert]').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      await api('PUT', `/api/alerts/${btn.getAttribute('data-toggle-alert')}/status`,
+          btn.getAttribute('data-next-status'));
+      loadAlerts();
+    });
+  });
+  alertsEl.querySelectorAll('[data-delete-alert]').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      await api('DELETE', `/api/alerts/${btn.getAttribute('data-delete-alert')}`);
+      loadAlerts();
+    });
+  });
+}
+
+document.getElementById('createAlertBtn').addEventListener('click', async () => {
+  const userId = currentUserId();
+  const symbol = document.getElementById('alertSymbol').value.trim().toUpperCase();
+  const condition = document.getElementById('alertCondition').value;
+  const threshold = parseFloat(document.getElementById('alertThreshold').value);
+  const cooldownSeconds = parseInt(document.getElementById('alertCooldown').value, 10) || 3600;
+  const extendedHours = document.getElementById('alertExtendedHours').checked;
+  alertErrorEl.textContent = '';
+  if (!userId || !symbol || Number.isNaN(threshold)) {
+    alertErrorEl.textContent = 'userId, symbol and threshold are all required.';
+    return;
+  }
+  try {
+    await api('POST', '/api/alerts', { userId, symbol, condition, threshold, cooldownSeconds, extendedHours });
+    document.getElementById('alertSymbol').value = '';
+    document.getElementById('alertThreshold').value = '';
+    loadAlerts();
+  } catch (e) {
+    alertErrorEl.textContent = e.message;
+  }
+});
+
+document.getElementById('loadUserDataBtn').addEventListener('click', () => {
+  userErrorEl.textContent = '';
+  alertErrorEl.textContent = '';
+  loadWatchlists().catch(e => userErrorEl.textContent = e.message);
+  loadAlerts().catch(e => alertErrorEl.textContent = e.message);
+});
 </script>
 </body>
 </html>
