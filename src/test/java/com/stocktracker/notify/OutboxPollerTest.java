@@ -8,6 +8,9 @@ import java.util.UUID;
 
 import org.junit.jupiter.api.Test;
 
+import io.micrometer.core.instrument.MeterRegistry;
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
+
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
@@ -18,6 +21,7 @@ class OutboxPollerTest {
 
     private final NotificationRepository repository = mock(NotificationRepository.class);
     private final Clock clock = Clock.fixed(Instant.parse("2026-07-14T15:00:00Z"), ZoneOffset.UTC);
+    private final MeterRegistry meterRegistry = new SimpleMeterRegistry();
 
     private Notification pending(String channel, int attempt) {
         Notification n = new Notification(UUID.randomUUID(), UUID.randomUUID(), channel, "{}");
@@ -37,7 +41,7 @@ class OutboxPollerTest {
             @Override public void send(Notification notification) { }
         };
 
-        new OutboxPoller(repository, List.of(emailChannel), clock).poll();
+        new OutboxPoller(repository, List.of(emailChannel), clock, meterRegistry).poll();
 
         assertThat(n.getStatus()).isEqualTo("SENT");
         assertThat(n.getSentAt()).isEqualTo(clock.instant());
@@ -55,7 +59,7 @@ class OutboxPollerTest {
             }
         };
 
-        new OutboxPoller(repository, List.of(failing), clock).poll();
+        new OutboxPoller(repository, List.of(failing), clock, meterRegistry).poll();
 
         assertThat(n.getStatus()).isEqualTo("PENDING");
         assertThat(n.getAttempt()).isEqualTo(1);
@@ -74,7 +78,7 @@ class OutboxPollerTest {
             }
         };
 
-        new OutboxPoller(repository, List.of(failing), clock).poll();
+        new OutboxPoller(repository, List.of(failing), clock, meterRegistry).poll();
 
         assertThat(n.getStatus()).isEqualTo("DEAD");
     }
@@ -85,7 +89,7 @@ class OutboxPollerTest {
         Notification n = pending("SMS", 0);
         when(repository.lockNextPending(anyInt())).thenReturn(List.of(n));
 
-        new OutboxPoller(repository, List.of(), clock).poll();
+        new OutboxPoller(repository, List.of(), clock, meterRegistry).poll();
 
         assertThat(n.getStatus()).isEqualTo("DEAD");
     }
@@ -102,7 +106,7 @@ class OutboxPollerTest {
             }
         };
 
-        new OutboxPoller(repository, List.of(emailChannel), clock).poll();
+        new OutboxPoller(repository, List.of(emailChannel), clock, meterRegistry).poll();
 
         assertThat(n.getStatus()).isEqualTo("PENDING");
         assertThat(n.getAttempt()).isEqualTo(0);

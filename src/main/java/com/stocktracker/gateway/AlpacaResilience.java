@@ -14,6 +14,7 @@ import io.github.resilience4j.ratelimiter.RateLimiter;
 import io.github.resilience4j.ratelimiter.RateLimiterConfig;
 import io.github.resilience4j.retry.Retry;
 import io.github.resilience4j.retry.RetryConfig;
+import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.Gauge;
 import io.micrometer.core.instrument.MeterRegistry;
 import org.springframework.web.client.HttpClientErrorException;
@@ -35,6 +36,8 @@ public class AlpacaResilience {
     private final RateLimiter rateLimiter;
     private final CircuitBreaker circuitBreaker;
     private final Retry retry;
+    private final Counter callsSucceeded;
+    private final Counter callsFailed;
 
     public AlpacaResilience(AlpacaProperties properties, MeterRegistry meterRegistry) {
         this.rateLimiter = RateLimiter.of("alpaca", RateLimiterConfig.custom()
@@ -72,6 +75,17 @@ public class AlpacaResilience {
         Gauge.builder("alpaca.circuitbreaker.state", circuitBreaker, cb -> cb.getState().ordinal())
                 .description("CircuitBreaker.State ordinal (CLOSED=0, OPEN=1, HALF_OPEN=2, ...)")
                 .register(meterRegistry);
+
+        // Step 8 task 1: upstream call count vs. the 200 rpm budget, split by outcome so a
+        // spike in alpaca.rest.calls{outcome=failure} is visible independent of raw volume.
+        this.callsSucceeded = Counter.builder("alpaca.rest.calls")
+                .tag("outcome", "success")
+                .description("Alpaca REST calls, by outcome")
+                .register(meterRegistry);
+        this.callsFailed = Counter.builder("alpaca.rest.calls")
+                .tag("outcome", "failure")
+                .description("Alpaca REST calls, by outcome")
+                .register(meterRegistry);
     }
 
     // Composed by hand rather than via the resilience4j-all Decorators helper — that
@@ -82,7 +96,14 @@ public class AlpacaResilience {
         Supplier<T> decorated = RateLimiter.decorateSupplier(rateLimiter, operation);
         decorated = CircuitBreaker.decorateSupplier(circuitBreaker, decorated);
         decorated = Retry.decorateSupplier(retry, decorated);
-        return decorated.get();
+        try {
+            T result = decorated.get();
+            callsSucceeded.increment();
+            return result;
+        } catch (RuntimeException e) {
+            callsFailed.increment();
+            throw e;
+        }
     }
 
     private static boolean isRetryable(Throwable t) {

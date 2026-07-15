@@ -12,6 +12,9 @@ import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.annotation.Transactional;
 
+import io.micrometer.core.instrument.MeterRegistry;
+import io.micrometer.core.instrument.Timer;
+
 /**
  * Picks up {@code PENDING} notifications and delivers them — the read side
  * of the outbox pattern the alert engine writes into (Step 5).
@@ -39,12 +42,17 @@ public class OutboxPoller {
     private final NotificationRepository repository;
     private final Map<String, NotificationChannel> channelsByName;
     private final Clock clock;
+    private final Timer sendLatency;
 
-    public OutboxPoller(NotificationRepository repository, List<NotificationChannel> channels, Clock clock) {
+    public OutboxPoller(NotificationRepository repository, List<NotificationChannel> channels, Clock clock,
+                         MeterRegistry meterRegistry) {
         this.repository = repository;
         this.channelsByName = channels.stream()
                 .collect(java.util.stream.Collectors.toMap(NotificationChannel::name, Function.identity()));
         this.clock = clock;
+        this.sendLatency = Timer.builder("notification.send.latency")
+                .description("Time spent inside NotificationChannel.send, per attempt")
+                .register(meterRegistry);
     }
 
     @Scheduled(fixedDelay = 1000)
@@ -72,12 +80,15 @@ public class OutboxPoller {
             return;
         }
 
+        Timer.Sample sample = Timer.start();
         try {
             channel.send(notification);
+            sample.stop(sendLatency);
             notification.setStatus("SENT");
             notification.setSentAt(clock.instant());
             repository.save(notification);
         } catch (Exception e) {
+            sample.stop(sendLatency);
             notification.incrementAttempt();
             if (notification.getAttempt() >= MAX_ATTEMPTS) {
                 markDead(notification, e.getMessage());
