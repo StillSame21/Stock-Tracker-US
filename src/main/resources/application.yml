@@ -1,0 +1,44 @@
+spring:
+  application.name: stock-tracker
+  datasource:
+    url: jdbc:postgresql://localhost:5432/stocktracker
+    username: tracker
+    password: tracker_local_only
+  jpa:
+    hibernate.ddl-auto: validate     # Flyway owns the schema. NEVER 'update'.
+    open-in-view: false
+  flyway:
+    enabled: true
+
+alpaca:
+  key-id: ${ALPACA_KEY_ID}
+  secret-key: ${ALPACA_SECRET_KEY}
+  data-url: ${ALPACA_DATA_URL:https://data.alpaca.markets}
+  trading-url: ${ALPACA_TRADING_URL:https://paper-api.alpaca.markets}
+  stream-url: ${ALPACA_STREAM_URL:wss://stream.data.alpaca.markets/v2/iex}
+  feed: ${ALPACA_FEED:iex}
+  rate-limit-per-minute: 180
+
+management:
+  endpoints.web.exposure.include: health,metrics,prometheus
+  metrics.tags.application: stock-tracker
+
+logging:
+  level:
+    com.stocktracker.gateway: DEBUG
+  pattern:
+    # symbol/alertId (Step 8) come from MDC — AlertEvaluator sets them for the duration of
+    # each evaluation. Empty string outside that scope, not "null".
+    console: "%d{HH:mm:ss.SSS} %-5level [%thread] [symbol=%X{symbol:-}] [alertId=%X{alertId:-}] %logger{36} - %msg%n"
+
+---
+# replay profile — reads the committed WS fixture, zero network. Default for tests.
+spring.config.activate.on-profile: replay
+alpaca.stream-mode: replay
+alpaca.replay-file: classpath:fixtures/iex-session.jsonl
+
+---
+# test-stream profile — Alpaca's 24/7 synthetic stream (symbol FAKEPACA).
+# Use this for daytime dev; the real IEX stream only prints during US sessions.
+spring.config.activate.on-profile: test-stream
+alpaca.stream-url: wss://stream.data.alpaca.markets/v2/test

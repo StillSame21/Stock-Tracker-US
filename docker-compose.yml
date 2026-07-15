@@ -1,0 +1,19 @@
+services:
+  postgres:
+    image: postgres:17-alpine
+    container_name: tracker-db
+    environment:
+      POSTGRES_DB: stocktracker
+      POSTGRES_USER: tracker
+      POSTGRES_PASSWORD: tracker_local_only
+    ports:
+      - "5432:5432"
+    volumes:
+      - tracker-pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U tracker -d stocktracker"]
+      interval: 5s
+      retries: 5
+
+volumes:
+  tracker-pgdata:
