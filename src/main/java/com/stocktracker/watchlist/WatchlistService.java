@@ -65,6 +65,7 @@ public class WatchlistService {
     }
 
     /** Joins the watchlist to the quote cache — one upstream call for the whole list, not one per symbol. */
+    @Transactional(readOnly = true)
     public Map<String, Quote> quotesFor(UUID watchlistId) {
         Watchlist watchlist = get(watchlistId);
         Set<String> symbols = watchlist.getSymbols().stream().map(Symbol::getSymbol).collect(Collectors.toSet());

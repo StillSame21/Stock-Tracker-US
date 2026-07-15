@@ -20,12 +20,18 @@ dependencies {
     implementation("org.springframework.boot:spring-boot-starter-data-jpa")
     implementation("org.springframework.boot:spring-boot-starter-validation")
     implementation("org.springframework.boot:spring-boot-starter-actuator")
+    implementation("org.springframework.boot:spring-boot-starter-mail")
     // NOTE: spring-boot-starter-aop does not exist for Boot 4.1.0 (confirmed 404 on Maven
     // Central — dropped upstream). Not needed here anyway: retry is implemented with
     // resilience4j-retry core (functional, no AOP proxying) rather than a Spring Framework 7
     // native @Retryable annotation whose exact package couldn't be verified. See AlpacaResilience.
 
     // --- DB ---
+    // spring-boot-flyway carries FlywayAutoConfiguration itself — Boot 4.1 split it out of
+    // spring-boot-autoconfigure into its own module (same split as spring-boot-health,
+    // spring-boot-hibernate). Without it Flyway never runs: no error, no log line, Hibernate's
+    // ddl-auto=validate just fails against an empty schema.
+    implementation("org.springframework.boot:spring-boot-flyway")
     implementation("org.flywaydb:flyway-core")
     implementation("org.flywaydb:flyway-database-postgresql")
     runtimeOnly("org.postgresql:postgresql")

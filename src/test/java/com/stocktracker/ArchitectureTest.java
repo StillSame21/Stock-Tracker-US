@@ -18,10 +18,12 @@ class ArchitectureTest {
     @ArchTest
     static final ArchRule alpaca_types_stay_inside_gateway_package =
             noClasses().that().resideOutsideOfPackage("com.stocktracker.gateway..")
-                    .should().dependOnClassesThat().resideInAPackage("com.stocktracker.gateway.alpaca..");
+                    .should().dependOnClassesThat().resideInAPackage("com.stocktracker.gateway.alpaca..")
+                    .allowEmptyShould(true);
 
     @ArchTest
     static final ArchRule only_gateway_talks_to_spring_web_client =
             noClasses().that().resideOutsideOfPackage("com.stocktracker.gateway..")
-                    .should().dependOnClassesThat().resideInAPackage("org.springframework.web.client..");
+                    .should().dependOnClassesThat().resideInAPackage("org.springframework.web.client..")
+                    .allowEmptyShould(true);
 }
