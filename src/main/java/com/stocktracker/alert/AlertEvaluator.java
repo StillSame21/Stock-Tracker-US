@@ -24,6 +24,10 @@ import com.stocktracker.notify.NotificationOutbox;
 import com.stocktracker.quote.Quote;
 import com.stocktracker.stream.BarEvent;
 
+import io.micrometer.core.instrument.Counter;
+import io.micrometer.core.instrument.MeterRegistry;
+import io.micrometer.core.instrument.Timer;
+
 /**
  * Subscribes to {@link BarEvent} directly off the price stream — never
  * through {@code CachedQuoteService} (L3.1: cache staleness invisible in a
@@ -65,19 +69,37 @@ public class AlertEvaluator {
     private final MarketClockService marketClock;
     private final MarketDataProvider marketDataProvider;
     private final Clock clock;
+    private final Timer evaluationLatency;
+    private final Counter alertsFired;
+    private final Counter alertsSuppressedByCooldown;
 
     private final Map<UUID, Instant> lastEvaluatedOriginalBar = new ConcurrentHashMap<>();
     private final Map<String, BigDecimal> previousCloseBySymbol = new ConcurrentHashMap<>();
 
     public AlertEvaluator(AlertRepository alertRepository, AlertIndex alertIndex,
                            NotificationOutbox notificationOutbox, MarketClockService marketClock,
-                           MarketDataProvider marketDataProvider, Clock clock) {
+                           MarketDataProvider marketDataProvider, Clock clock, MeterRegistry meterRegistry) {
         this.alertRepository = alertRepository;
         this.alertIndex = alertIndex;
         this.notificationOutbox = notificationOutbox;
         this.marketClock = marketClock;
         this.marketDataProvider = marketDataProvider;
         this.clock = clock;
+
+        // Step 8 task 1: bar-to-alert latency (p50/p99 come free from the Prometheus
+        // registry's histogram), and how often the engine fires vs. suppresses a would-be
+        // fire because a re-arm is blocked by cooldown — the two numbers "is it working" and
+        // "is cooldown doing its job" boil down to.
+        this.evaluationLatency = Timer.builder("alert.evaluation.latency")
+                .description("Time from a bar's own timestamp to the evaluator processing it")
+                .register(meterRegistry);
+        this.alertsFired = Counter.builder("alert.fired")
+                .description("Alerts that transitioned ARMED -> TRIGGERED and enqueued a notification")
+                .register(meterRegistry);
+        this.alertsSuppressedByCooldown = Counter.builder("alert.suppressed")
+                .tag("reason", "cooldown")
+                .description("Re-arm conditions met but blocked because cooldown hasn't elapsed")
+                .register(meterRegistry);
     }
 
     /** Cleared daily, same schedule as the nightly symbol sync, so PCT_CHANGE baselines don't go stale across sessions. */
@@ -103,7 +125,18 @@ public class AlertEvaluator {
             if (!event.updated()) {
                 lastEvaluatedOriginalBar.put(alert.getId(), event.barTimestamp());
             }
+            recordEvaluationLatency(event);
             withLoggingContext(alert, event.symbol(), () -> evaluateOne(alert, event));
+        }
+    }
+
+    private void recordEvaluationLatency(BarEvent event) {
+        if (event.barTimestamp() == null) {
+            return;
+        }
+        Duration latency = Duration.between(event.barTimestamp(), clock.instant());
+        if (!latency.isNegative()) {
+            evaluationLatency.record(latency);
         }
     }
 
@@ -135,9 +168,13 @@ public class AlertEvaluator {
             if (isConditionMet(alert, bar)) {
                 fire(alert, bar);
             }
-        } else if (isReArmed(alert, bar) && cooldownElapsed(alert)) {
-            alert.setArmed(true);
-            alertRepository.save(alert);
+        } else if (isReArmed(alert, bar)) {
+            if (cooldownElapsed(alert)) {
+                alert.setArmed(true);
+                alertRepository.save(alert);
+            } else {
+                alertsSuppressedByCooldown.increment();
+            }
         }
     }
 
@@ -146,6 +183,7 @@ public class AlertEvaluator {
         alert.setLastFiredAt(clock.instant());
         alertRepository.save(alert);
         notificationOutbox.enqueue(alert.getId(), alert.getUserId(), "EMAIL", buildPayload(alert, bar));
+        alertsFired.increment();
         log.info("Alert {} fired on {} ({})", alert.getId(), bar.symbol(), alert.getCondition());
     }
 
@@ -169,11 +207,11 @@ public class AlertEvaluator {
             case PRICE_ABOVE -> bar.close().compareTo(alert.getThreshold().subtract(band)) < 0;
             case PRICE_BELOW -> bar.close().compareTo(alert.getThreshold().add(band)) > 0;
             case PCT_CHANGE_UP -> {
-                BigDecimal pct = pctChange(bar.symbol());
+                BigDecimal pct = percentChange(bar);
                 yield pct != null && pct.compareTo(alert.getThreshold().subtract(REARM_BAND_PCT)) < 0;
             }
             case PCT_CHANGE_DOWN -> {
-                BigDecimal pct = pctChange(bar.symbol());
+                BigDecimal pct = percentChange(bar);
                 yield pct != null && pct.compareTo(alert.getThreshold().negate().add(REARM_BAND_PCT)) > 0;
             }
             // Volume spikes aren't mean-reverting around a threshold the way price is —
@@ -184,21 +222,32 @@ public class AlertEvaluator {
     }
 
     private boolean pctChangeMeetsUp(Alert alert, BarEvent bar) {
-        BigDecimal pct = pctChange(bar.symbol());
+        BigDecimal pct = percentChange(bar);
         return pct != null && pct.compareTo(alert.getThreshold()) >= 0;
     }
 
     private boolean pctChangeMeetsDown(Alert alert, BarEvent bar) {
-        BigDecimal pct = pctChange(bar.symbol());
+        BigDecimal pct = percentChange(bar);
         return pct != null && pct.compareTo(alert.getThreshold().negate()) <= 0;
     }
 
-    // L5.3: "percent change from what?" — this codebase's answer is previous close,
-    // matching Quote.dailyChangePct(). Cached per symbol for the process's current
-    // trading day; resetDailyBaselines() clears it (wired to the nightly symbol sync).
-    private BigDecimal pctChange(String symbol) {
-        BigDecimal prevClose = previousCloseBySymbol.computeIfAbsent(symbol, this::lookupPreviousClose);
-        return prevClose;
+    // L5.3: "percent change from what?" — this codebase's answer is previous close, matching
+    // Quote.dailyChangePct(). percentChange is (bar.close - prevClose) / prevClose * 100 against
+    // the *live* bar price — previousClose() alone is just the cached baseline, never a percent.
+    private BigDecimal percentChange(BarEvent bar) {
+        BigDecimal prevClose = previousClose(bar.symbol());
+        if (prevClose == null || prevClose.signum() == 0) {
+            return null;
+        }
+        return bar.close().subtract(prevClose)
+                .divide(prevClose, 6, RoundingMode.HALF_UP)
+                .multiply(BigDecimal.valueOf(100));
+    }
+
+    // Cached per symbol for the process's current trading day; resetDailyBaselines() clears
+    // it (wired to the nightly symbol sync).
+    private BigDecimal previousClose(String symbol) {
+        return previousCloseBySymbol.computeIfAbsent(symbol, this::lookupPreviousClose);
     }
 
     private BigDecimal lookupPreviousClose(String symbol) {

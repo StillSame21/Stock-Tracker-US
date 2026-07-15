@@ -13,7 +13,10 @@ import com.stocktracker.gateway.MarketClock;
 import com.stocktracker.gateway.MarketClockService;
 import com.stocktracker.gateway.MarketDataProvider;
 import com.stocktracker.notify.NotificationOutbox;
+import com.stocktracker.quote.Quote;
 import com.stocktracker.stream.BarEvent;
+
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
@@ -38,7 +41,8 @@ class AlertEvaluatorTest {
         when(alertRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
         when(marketClockService.getClock()).thenReturn(new MarketClock(Instant.now(), true, null, null));
         evaluator = new AlertEvaluator(alertRepository, alertIndex, notificationOutbox, marketClockService,
-                marketDataProvider, Clock.fixed(Instant.parse("2026-07-14T15:00:00Z"), ZoneOffset.UTC));
+                marketDataProvider, Clock.fixed(Instant.parse("2026-07-14T15:00:00Z"), ZoneOffset.UTC),
+                new SimpleMeterRegistry());
     }
 
     private static BarEvent bar(String symbol, Instant t, double open, double high, double low, double close, long volume, boolean updated) {
@@ -159,5 +163,69 @@ class AlertEvaluatorTest {
 
         assertThat(alert.isArmed()).isFalse();
         verify(notificationOutbox, times(1)).enqueue(any(), any(), anyString(), anyString());
+    }
+
+    // F1: PCT_CHANGE previously compared the raw previous-close *price* against the percentage
+    // threshold (never touching the live bar), so it fired on nearly every bar. These pin the
+    // actual (bar.close - prevClose) / prevClose * 100 computation.
+
+    private void stubPreviousClose(double prevClose) {
+        // lookupPreviousClose derives prevClose as lastPrice - dailyChange; dailyChange=0
+        // makes lastPrice itself the previous close, the simplest quote to stub.
+        when(marketDataProvider.getQuote(anyString())).thenReturn(new Quote("AAPL",
+                BigDecimal.valueOf(prevClose), BigDecimal.ZERO, BigDecimal.ZERO, 0,
+                Instant.parse("2026-07-14T04:00:00Z"), "iex", false));
+    }
+
+    @Test
+    void pctChangeUpFiresOnlyWhenLiveBarCrossesThePercentThreshold() {
+        stubPreviousClose(100);
+        Alert alert = newAlert(Condition.PCT_CHANGE_UP, 5, 3600, false); // fire at +5% or more
+
+        // +4% — below threshold, must not fire.
+        evaluator.evaluateOne(alert, bar("AAPL", Instant.parse("2026-07-14T15:30:00Z"), 103, 104.5, 103, 104, 1000, false));
+        assertThat(alert.isArmed()).isTrue();
+        verify(notificationOutbox, times(0)).enqueue(any(), any(), anyString(), anyString());
+
+        // +6% — crosses the threshold, must fire exactly once.
+        evaluator.evaluateOne(alert, bar("AAPL", Instant.parse("2026-07-14T15:31:00Z"), 105, 106.5, 105, 106, 1000, false));
+        assertThat(alert.isArmed()).isFalse();
+        verify(notificationOutbox, times(1)).enqueue(any(), any(), anyString(), anyString());
+    }
+
+    @Test
+    void pctChangeDownFiresOnlyWhenLiveBarCrossesTheNegativePercentThreshold() {
+        stubPreviousClose(100);
+        Alert alert = newAlert(Condition.PCT_CHANGE_DOWN, 5, 3600, false); // fire at -5% or lower
+
+        // -4% — above (less negative than) the threshold, must not fire.
+        evaluator.evaluateOne(alert, bar("AAPL", Instant.parse("2026-07-14T15:30:00Z"), 97, 97, 95.5, 96, 1000, false));
+        assertThat(alert.isArmed()).isTrue();
+        verify(notificationOutbox, times(0)).enqueue(any(), any(), anyString(), anyString());
+
+        // -6% — crosses the threshold, must fire exactly once.
+        evaluator.evaluateOne(alert, bar("AAPL", Instant.parse("2026-07-14T15:31:00Z"), 95, 95, 93.5, 94, 1000, false));
+        assertThat(alert.isArmed()).isFalse();
+        verify(notificationOutbox, times(1)).enqueue(any(), any(), anyString(), anyString());
+    }
+
+    @Test
+    void pctChangeUpReArmsAfterRetreatingThroughBandAndFiresAgainOnNextCross() {
+        stubPreviousClose(100);
+        Alert alert = newAlert(Condition.PCT_CHANGE_UP, 5, 0, false); // 0s cooldown for a fast test
+
+        // +6% — fires.
+        evaluator.evaluateOne(alert, bar("AAPL", Instant.parse("2026-07-14T15:30:00Z"), 105, 106.5, 105, 106, 1000, false));
+        assertThat(alert.isArmed()).isFalse();
+
+        // Retreats to +0.5% — well under the re-arm line (threshold 5% - 0.5% band = 4.5%).
+        evaluator.evaluateOne(alert, bar("AAPL", Instant.parse("2026-07-14T15:31:00Z"), 100.5, 100.6, 100.4, 100.5, 1000, false));
+        assertThat(alert.isArmed()).isTrue();
+
+        // Crosses +5% again — fires a second time.
+        evaluator.evaluateOne(alert, bar("AAPL", Instant.parse("2026-07-14T15:32:00Z"), 105, 106.5, 105, 106, 1000, false));
+        assertThat(alert.isArmed()).isFalse();
+
+        verify(notificationOutbox, times(2)).enqueue(any(), any(), anyString(), anyString());
     }
 }

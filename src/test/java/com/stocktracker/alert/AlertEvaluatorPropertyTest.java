@@ -14,7 +14,10 @@ import com.stocktracker.gateway.MarketClock;
 import com.stocktracker.gateway.MarketClockService;
 import com.stocktracker.gateway.MarketDataProvider;
 import com.stocktracker.notify.NotificationOutbox;
+import com.stocktracker.quote.Quote;
 import com.stocktracker.stream.BarEvent;
+
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 
 import net.jqwik.api.Arbitraries;
 import net.jqwik.api.Arbitrary;
@@ -86,7 +89,7 @@ class AlertEvaluatorPropertyTest {
         }).when(notificationOutbox).enqueue(any(), any(), any(), any());
 
         AlertEvaluator evaluator = new AlertEvaluator(alertRepository, alertIndex, notificationOutbox,
-                marketClockService, marketDataProvider, clock);
+                marketClockService, marketDataProvider, clock, new SimpleMeterRegistry());
 
         Alert alert = new Alert(UUID.randomUUID(), UUID.randomUUID(), Condition.PRICE_ABOVE,
                 BigDecimal.valueOf(150), COOLDOWN_SECONDS, false);
@@ -111,5 +114,59 @@ class AlertEvaluatorPropertyTest {
     Arbitrary<List<Double>> priceWalks() {
         // Deliberately adversarial: dense oscillation right around the 150 threshold.
         return Arbitraries.doubles().between(149.0, 151.0).list().ofMinSize(20).ofMaxSize(150);
+    }
+
+    // F1: same cooldown-cap invariant, but driving PCT_CHANGE_UP — the condition that was
+    // comparing a raw price against a percentage and firing on nearly every bar. This walk
+    // oscillates the *percent change from a fixed prevClose* right around the threshold,
+    // which would trip that bug on effectively every tick if it were still present.
+    @Property(tries = 200)
+    void pctChangeFiresNeverExceedDurationOverCooldown(@ForAll("percentWalks") List<Double> pctWalk) {
+        Instant start = Instant.parse("2026-07-14T15:30:00Z");
+        MutableClock clock = new MutableClock(start);
+        BigDecimal prevClose = BigDecimal.valueOf(100);
+
+        AlertRepository alertRepository = mock(AlertRepository.class);
+        when(alertRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
+        AlertIndex alertIndex = mock(AlertIndex.class);
+        MarketClockService marketClockService = mock(MarketClockService.class);
+        when(marketClockService.getClock()).thenReturn(new MarketClock(start, true, null, null));
+        MarketDataProvider marketDataProvider = mock(MarketDataProvider.class);
+        when(marketDataProvider.getQuote(any())).thenReturn(new Quote("AAPL", prevClose, BigDecimal.ZERO,
+                BigDecimal.ZERO, 0, start, "iex", false));
+        NotificationOutbox notificationOutbox = mock(NotificationOutbox.class);
+        AtomicInteger fireCount = new AtomicInteger();
+        doAnswer(inv -> {
+            fireCount.incrementAndGet();
+            return null;
+        }).when(notificationOutbox).enqueue(any(), any(), any(), any());
+
+        AlertEvaluator evaluator = new AlertEvaluator(alertRepository, alertIndex, notificationOutbox,
+                marketClockService, marketDataProvider, clock, new SimpleMeterRegistry());
+
+        Alert alert = new Alert(UUID.randomUUID(), UUID.randomUUID(), Condition.PCT_CHANGE_UP,
+                BigDecimal.valueOf(5), COOLDOWN_SECONDS, false); // fire at +5% or more
+        alert.setId(UUID.randomUUID());
+
+        Instant t = start;
+        for (double pct : pctWalk) {
+            BigDecimal close = prevClose.add(prevClose.multiply(BigDecimal.valueOf(pct))
+                    .divide(BigDecimal.valueOf(100)));
+            BarEvent bar = new BarEvent("AAPL", t, close, close.add(BigDecimal.valueOf(0.05)),
+                    close.subtract(BigDecimal.valueOf(0.05)), close, 1000, false);
+            clock.advanceTo(t);
+            evaluator.evaluateOne(alert, bar);
+            t = t.plusSeconds(BAR_INTERVAL_SECONDS);
+        }
+
+        long durationSeconds = BAR_INTERVAL_SECONDS * pctWalk.size();
+        long maxAllowedFires = durationSeconds / COOLDOWN_SECONDS + 1;
+        assertThat(fireCount.get()).isLessThanOrEqualTo((int) maxAllowedFires);
+    }
+
+    @Provide
+    Arbitrary<List<Double>> percentWalks() {
+        // Dense oscillation right around the 5% threshold.
+        return Arbitraries.doubles().between(4.0, 6.0).list().ofMinSize(20).ofMaxSize(150);
     }
 }
